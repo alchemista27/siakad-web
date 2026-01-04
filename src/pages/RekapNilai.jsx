@@ -11,6 +11,7 @@ const RekapNilai = () => {
     const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [isGenerating, setIsGenerating] = useState(null); // State untuk melacak laporan siswa mana yang sedang dibuat
 
     const fetchSummary = useCallback(async () => {
         try {
@@ -77,6 +78,72 @@ const RekapNilai = () => {
         }
     };
 
+    const handleExportStudentReport = async (student) => {
+        setIsGenerating(student.studentId); // Atur status loading untuk siswa ini
+        try {
+            // 1. Panggil endpoint backend baru untuk mendapatkan detail nilai siswa
+            const response = await api.get(`/teacher/assignments/${assignmentId}/students/${student.studentId}/report`);
+            const reportData = response.data;
+
+            // 2. Buat dokumen PDF
+            const doc = new jsPDF();
+
+            // Header
+            doc.setFontSize(16);
+            doc.text('Laporan Hasil Belajar Siswa', doc.internal.pageSize.getWidth() / 2, 20, { align: 'center' });
+
+            // Informasi Siswa
+            doc.setFontSize(11);
+            doc.text(`Nama Siswa : ${reportData.student.fullName}`, 14, 35);
+            doc.text(`NIS          : ${reportData.student.nis}`, 14, 42);
+            doc.text(`Kelas        : ${reportData.assignment.className}`, 14, 49);
+
+            // Membuat deskripsi Capaian Kompetensi otomatis (sebagai placeholder)
+            let capaianKompetensi = `Siswa menunjukkan penguasaan yang baik pada sebagian besar materi ${reportData.assignment.subjectName}.`;
+            if (reportData.summary.isPassing) {
+                if (reportData.summary.averageScore > 85) {
+                    capaianKompetensi = `Siswa menunjukkan penguasaan yang sangat baik dan konsisten pada seluruh materi ${reportData.assignment.subjectName}, mampu menerapkan konsep dalam berbagai situasi.`;
+                } else {
+                    capaianKompetensi = `Siswa telah mencapai ketuntasan belajar dan menunjukkan pemahaman yang baik pada materi ${reportData.assignment.subjectName}.`;
+                }
+            } else {
+                capaianKompetensi = `Siswa masih memerlukan bimbingan dan latihan lebih lanjut pada beberapa materi ${reportData.assignment.subjectName} untuk dapat mencapai ketuntasan belajar.`;
+            }
+
+            const tableBody = [
+                // Kelompok Mata Pelajaran (contoh)
+                [{ content: 'A. Mata Pelajaran Umum', colSpan: 4, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }],
+                [
+                    '1', // Nomor
+                    reportData.assignment.subjectName, // Intrakurikuler
+                    reportData.summary.averageScore.toFixed(2), // Nilai Akhir
+                    capaianKompetensi // Capaian Kompetensi
+                ]
+            ];
+
+            autoTable(doc, {
+                startY: 60,
+                head: [['No', 'Intrakurikuler', 'Nilai Akhir', 'Capaian Kompetensi']],
+                body: tableBody,
+                theme: 'grid',
+                headStyles: { fillColor: [22, 160, 133], textColor: 255 },
+                didParseCell: function (data) {
+                    // Mengatur agar deskripsi capaian kompetensi bisa wrap text
+                    if (data.column.dataKey === 3) { // Indeks kolom 'Capaian Kompetensi'
+                        data.cell.styles.cellWidth = 'auto';
+                    }
+                }
+            });
+
+            doc.save(`rapot_${reportData.student.fullName.replace(/\s/g, '_')}_${reportData.assignment.subjectName}.pdf`);
+        } catch (err) {
+            console.error("Gagal membuat Laporan Siswa:", err);
+            toast.error(`Gagal membuat laporan untuk ${student.fullName}: ${err.response?.data?.message || 'Server Error'}`);
+        } finally {
+            setIsGenerating(null); // Reset status loading
+        }
+    };
+
     return (
         <div className="min-h-screen p-8 bg-gray-50">
             <div className="p-6 bg-white rounded-lg shadow">
@@ -107,6 +174,7 @@ const RekapNilai = () => {
                                 <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Nama Siswa</th>
                                 <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Nilai Rata-rata</th>
                                 <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Status</th>
+                                <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Aksi</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
@@ -128,6 +196,15 @@ const RekapNilai = () => {
                                             }`}>
                                                 {isPassing ? 'Tuntas' : 'Belum Tuntas'}
                                             </span>
+                                        </td>
+                                        <td className="px-4 py-2 whitespace-nowrap">
+                                            <button
+                                                onClick={() => handleExportStudentReport(item)}
+                                                disabled={isGenerating === item.studentId}
+                                                className="px-3 py-1 text-sm text-blue-700 bg-blue-100 rounded hover:bg-blue-200 disabled:bg-gray-300 disabled:cursor-wait"
+                                            >
+                                                {isGenerating === item.studentId ? 'Membuat...' : 'Cetak Rapot'}
+                                            </button>
                                         </td>
                                     </tr>
                                 );

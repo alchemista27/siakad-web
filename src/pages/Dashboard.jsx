@@ -1,4 +1,4 @@
-import { use, useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
 
@@ -8,34 +8,37 @@ const Dashboard = () => {
     const [classes, setClasses] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect (() => {
-        const userData = localStorage.getItem('user');
-        if (userData) {
-            setUser(JSON.parse(userData));
-            fetchClasses();
-        } else {
-            setLoading(false);
-            navigate('/');
-        }
-    }, []);
+    const handleLogout = useCallback(() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/');
+    }, [navigate]);
 
-    const fetchClasses = async () => {
+    const fetchClasses = useCallback(async () => {
         try {
             // pakai API untuk fetch data kelas sesuai role user
             const response = await api.get('/teacher/my-classes');
             setClasses(response.data);
         } catch (error) {
             console.error('Gagal ambil data kelas:', error);
+            // Jika token tidak valid (401), otomatis logout
+            if (error.response?.status === 401) {
+                handleLogout();
+            }
         } finally {
             setLoading(false);
         }
-    };
+    }, [handleLogout]);
 
-    const handleLogout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        navigate('/');
-    };
+    useEffect (() => {
+        const userData = localStorage.getItem('user');
+        if (userData) {
+            setUser(JSON.parse(userData));
+            fetchClasses();
+        } else {
+            navigate('/');
+        }
+    }, [navigate, fetchClasses]);
 
     return (
         <div className = 'min-h-screen bg-gray-50'>
@@ -97,7 +100,7 @@ const Dashboard = () => {
                             </p>
                             <button 
                             className="w-full px-4 py-2 mt-2 text-white bg-blue-600 rounded hover:bg-blue-700"
-                            onClick={() => alert(`Nanti buka halaman input nilai untuk kelas ${item.class.name}`)}>
+                            onClick={() => navigate(`/kelas/${item.id}/nilai`)}>
                                 Input Nilai
                             </button>
                         </div>

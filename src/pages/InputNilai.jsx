@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'react-toastify';
 import api from '../api';
 
 const InputNilai = () => {
@@ -10,10 +11,13 @@ const InputNilai = () => {
     const [error, setError] = useState('');
     // State untuk menampung perubahan nilai: { 'studentId-assessmentId': score }
     const [grades, setGrades] = useState({});
+    // State untuk menyimpan nilai awal, untuk mendeteksi perubahan
+    const [initialGrades, setInitialGrades] = useState({});
 
     // State untuk form penilaian baru
     const [newAssessmentName, setNewAssessmentName] = useState('');
     const [isCreating, setIsCreating] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
 
     const fetchDetails = useCallback(async () => {
@@ -22,13 +26,15 @@ const InputNilai = () => {
             setAssignment(response.data);
 
             // Inisialisasi state 'grades' dengan nilai yang sudah ada dari database
-            const initialGrades = {};
+            const fetchedGrades = {};
             response.data.assessments.forEach(assessment => {
                 assessment.grades.forEach(grade => {
-                    initialGrades[`${grade.studentId}-${assessment.id}`] = grade.score;
+                    // Gunakan null untuk nilai kosong agar konsisten
+                    fetchedGrades[`${grade.studentId}-${assessment.id}`] = grade.score ?? null;
                 });
             });
-            setGrades(initialGrades);
+            setGrades(fetchedGrades);
+            setInitialGrades(fetchedGrades);
 
         } catch (err) {
             setError('Gagal mengambil data detail kelas.');
@@ -47,26 +53,79 @@ const InputNilai = () => {
     }, [fetchDetails]);
 
     const handleGradeChange = (studentId, assessmentId, value) => {
-        const score = value === '' ? '' : parseFloat(value);
-        // Batasi nilai antara 0 dan 100
-        if (score > 100) return;
+        // Jika input dikosongkan, simpan sebagai string kosong agar field bisa dihapus
+        if (value === '') {
+            setGrades(prev => ({ ...prev, [`${studentId}-${assessmentId}`]: '' }));
+            return;
+        }
+
+        const score = parseFloat(value);
+
+        // Cegah NaN masuk ke dalam state. Ini adalah penyebab utama nilai hilang dari input.
+        // Jika hasil parse bukan angka (misal: pengguna mengetik huruf), jangan update state.
+        if (isNaN(score)) {
+            return;
+        }
+
+        // Batasi nilai (clamp) antara 0 dan 100 menggunakan Math.max dan Math.min
+        const clampedScore = Math.max(0, Math.min(score, 100));
 
         setGrades(prev => ({
             ...prev,
-            [`${studentId}-${assessmentId}`]: score
+            [`${studentId}-${assessmentId}`]: clampedScore
         }));
     };
 
     const handleSaveChanges = async () => {
-        alert('Fitur "Simpan Perubahan" akan diimplementasikan selanjutnya!\nData di console log.');
-        console.log('Data nilai yang akan disimpan:', grades);
-        // TODO: Buat endpoint POST/PUT di backend untuk menyimpan data 'grades'
+        setIsSaving(true);
+        try {
+            // Bandingkan 'grades' dengan 'initialGrades' dan kirim perubahannya saja.
+            const changedGrades = Object.keys(grades).reduce((acc, key) => {
+                const currentScore = grades[key];
+                const initialScore = initialGrades[key];
+
+                // Normalisasi nilai untuk perbandingan: null, undefined, dan '' dianggap sama (kosong).
+                const normalizedCurrent = currentScore === '' || currentScore === null ? null : parseFloat(currentScore);
+                const normalizedInitial = initialScore === null || initialScore === undefined ? null : parseFloat(initialScore);
+
+                // Jika nilainya berbeda, tambahkan ke payload
+                if (normalizedCurrent !== normalizedInitial) {
+                    const [studentId, assessmentId] = key.split('-');
+                    acc.push({
+                        studentId: parseInt(studentId, 10),
+                        assessmentId: parseInt(assessmentId, 10),
+                        score: normalizedCurrent,
+                    });
+                }
+                return acc;
+            }, []);
+
+
+            if (changedGrades.length === 0) {
+                toast.info('Tidak ada perubahan untuk disimpan.');
+                return;
+            }
+
+            // Ganti '/teacher/grades/bulk-update' dengan endpoint backend Anda yang sebenarnya
+            await api.put('/teacher/grades/bulk-update', { grades: changedGrades });
+
+            toast.success('Perubahan berhasil disimpan!');
+            // Setelah berhasil, update state awal agar sesuai dengan state saat ini
+            setInitialGrades(grades);
+
+        } catch (err) {
+            // Tampilkan error yang lebih detail di console untuk debugging
+            console.error("Gagal menyimpan perubahan:", err.response?.data || err.message);
+            toast.error(`Gagal menyimpan perubahan: ${err.response?.data?.message || 'Server Error'}`);
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleCreateAssessment = async (e) => {
         e.preventDefault();
         if (!newAssessmentName.trim()) {
-            alert('Nama penilaian tidak boleh kosong.');
+            toast.warn('Nama penilaian tidak boleh kosong.');
             return;
         }
         setIsCreating(true);
@@ -78,18 +137,59 @@ const InputNilai = () => {
             setNewAssessmentName(''); // Reset form
             await fetchDetails(); // Ambil data terbaru untuk menampilkan kolom baru
         } catch (err) {
-            alert('Gagal membuat penilaian baru.');
+            console.error("Gagal membuat penilaian:", err.response?.data || err.message);
+            toast.error(`Gagal membuat penilaian: ${err.response?.data?.message || 'Server Error'}`);
         } finally {
             setIsCreating(false);
         }
     };
 
+    const handleDeleteAssessment = async (assessmentId, assessmentName) => {
+        if (!window.confirm(`Apakah Anda yakin ingin menghapus penilaian "${assessmentName}"? Semua nilai yang terkait akan ikut terhapus.`)) {
+            return;
+        }
+    
+        try {
+            // Sesuaikan endpoint dengan backend Anda, contoh: /teacher/assessments/:id
+            await api.delete(`/teacher/assessments/${assessmentId}`);
+            toast.success(`Penilaian "${assessmentName}" berhasil dihapus.`);
+            await fetchDetails(); // Refresh data untuk memperbarui UI
+        } catch (err) {
+            console.error('Error deleting assessment:', err.response?.data || err.message);
+            toast.error(`Gagal menghapus penilaian: ${err.response?.data?.message || 'Server Error'}`);
+        }
+    };
+
+    // Memoize pengecekan perubahan untuk efisiensi dan menonaktifkan tombol simpan
+    const hasChanges = useMemo(() => {
+        const gradeKeys = Object.keys(grades);
+        const initialGradeKeys = Object.keys(initialGrades);
+
+        // Jika jumlah key berbeda, berarti ada perubahan (seharusnya tidak terjadi, tapi sebagai pengaman)
+        if (gradeKeys.length !== initialGradeKeys.length) return true;
+
+        for (const key of gradeKeys) {
+            const currentScore = grades[key];
+            const initialScore = initialGrades[key];
+
+            const normalizedCurrent = currentScore === '' || currentScore === null ? null : parseFloat(currentScore);
+            const normalizedInitial = initialScore === null || initialScore === undefined ? null : parseFloat(initialScore);
+
+            if (normalizedCurrent !== normalizedInitial) {
+                return true; // Ditemukan perubahan
+            }
+        }
+
+        return false; // Tidak ada perubahan
+    }, [grades, initialGrades]);
+
     if (loading) return <div className="p-8">Memuat data kelas...</div>;
     if (error) return <div className="p-8 text-red-500">{error}</div>;
     if (!assignment) return <div className="p-8">Data tidak ditemukan.</div>;
 
-    const { students } = assignment.class;
-    const { assessments } = assignment;
+    // Gunakan optional chaining untuk mencegah crash jika relasi data (class) tidak ada
+    const students = assignment?.class?.students || [];
+    const assessments = assignment?.assessments || [];
 
     return (
         <div className="min-h-screen p-8 bg-gray-50">
@@ -99,8 +199,8 @@ const InputNilai = () => {
                 </button>
                 <h1 className="text-2xl font-bold text-gray-800">Input Nilai</h1>
                 <div className="flex space-x-4 text-gray-600">
-                    <span>Kelas: <strong>{assignment.class.name}</strong></span>
-                    <span>Mata Pelajaran: <strong>{assignment.subject.name}</strong></span>
+                    <span>Kelas: <strong>{assignment?.class?.name || 'Memuat...'}</strong></span>
+                    <span>Mata Pelajaran: <strong>{assignment?.subject?.name || 'Memuat...'}</strong></span>
                 </div>
 
                 {/* Form Tambah Penilaian */}
@@ -134,17 +234,30 @@ const InputNilai = () => {
                                 <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Nama Siswa</th>
                                 {assessments.map(assessment => (
                                     <th key={assessment.id} className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">
-                                        {assessment.name}
+                                        <div className="flex items-center justify-between">
+                                            <span>{assessment.name}</span>
+                                            <button
+                                                onClick={() => handleDeleteAssessment(assessment.id, assessment.name)}
+                                                className="p-1 text-gray-400 rounded-full hover:bg-red-100 hover:text-red-600"
+                                                title={`Hapus penilaian ${assessment.name}`}
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                            </button>
+                                        </div>
                                     </th>
                                 ))}
                                 {assessments.length === 0 && (
                                     <th className="px-4 py-2 text-xs font-medium tracking-wider text-left text-gray-500 uppercase">Nilai</th>
-                                ))}
+                                )}
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                             {students.map((studentClass, index) => {
-                                const student = studentClass.student;
+                                const student = studentClass?.student;
+                                // Safety check: Jika data siswa tidak ada karena inkonsistensi, lewati baris ini.
+                                if (!student) return null;
                                 return (
                                     <tr key={student.id} className="hover:bg-gray-50">
                                         <td className="px-4 py-2 whitespace-nowrap">{index + 1}</td>
@@ -180,9 +293,10 @@ const InputNilai = () => {
                 <div className="flex justify-end mt-6">
                     <button
                         onClick={handleSaveChanges}
-                        className="px-6 py-2 text-white bg-blue-600 rounded-md shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        disabled={isSaving || !hasChanges}
+                        className="px-6 py-2 text-white bg-blue-600 rounded-md shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
                     >
-                        Simpan Perubahan
+                        {isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}
                     </button>
                 </div>
             </div>

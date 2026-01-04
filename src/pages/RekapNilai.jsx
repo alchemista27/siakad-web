@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import api from '../api';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const RekapNilai = () => {
     const { id: assignmentId } = useParams();
@@ -37,6 +39,44 @@ const RekapNilai = () => {
 
     const { assignment, studentSummaries } = summary;
 
+    const handleExportPDF = () => {
+        try {
+            const doc = new jsPDF();
+
+            // Judul Dokumen
+            doc.setFontSize(18);
+            doc.text('Rekapitulasi Nilai', 14, 22);
+            doc.setFontSize(11);
+            doc.setTextColor(100);
+            doc.text(`Kelas: ${assignment?.class?.name || ''}`, 14, 30);
+            doc.text(`Mata Pelajaran: ${assignment?.subject?.name || ''}`, 14, 36);
+
+            // Definisikan kolom dan baris untuk tabel
+            const tableColumn = ["No", "NIS", "Nama Siswa", "Nilai Rata-rata", "Status"];
+            const tableRows = [];
+
+            studentSummaries.forEach((item, index) => {
+                const isPassing = item.averageScore >= assignment.kkm;
+                const status = isPassing ? 'Tuntas' : 'Belum Tuntas';
+                const score = item.averageScore !== null ? item.averageScore.toFixed(2) : 'N/A';
+
+                const rowData = [index + 1, item.nis, item.fullName, score, status];
+                tableRows.push(rowData);
+            });
+
+            // Buat tabel menggunakan autoTable dengan sintaks yang lebih modern dan stabil
+            autoTable(doc, {
+                head: [tableColumn],
+                body: tableRows,
+                startY: 45,
+            });
+            doc.save(`rekap_nilai_${assignment?.class?.name}_${assignment?.subject?.name}.pdf`);
+        } catch (err) {
+            console.error("Gagal membuat PDF:", err);
+            toast.error("Terjadi kesalahan saat membuat file PDF.");
+        }
+    };
+
     return (
         <div className="min-h-screen p-8 bg-gray-50">
             <div className="p-6 bg-white rounded-lg shadow">
@@ -47,6 +87,15 @@ const RekapNilai = () => {
                 <div className="flex space-x-4 text-gray-600">
                     <span>Kelas: <strong>{assignment?.class?.name || '...'}</strong></span>
                     <span>Mata Pelajaran: <strong>{assignment?.subject?.name || '...'}</strong></span>
+                </div>
+
+                <div className="flex justify-end mt-4">
+                    <button
+                        onClick={handleExportPDF}
+                        className="px-4 py-2 text-sm text-white bg-green-600 rounded-md shadow hover:bg-green-700"
+                    >
+                        Ekspor ke PDF
+                    </button>
                 </div>
 
                 <div className="mt-6 overflow-x-auto">
